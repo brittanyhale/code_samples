@@ -1,0 +1,361 @@
+---
+title: "Transmission Trends Bivariate Plots"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+<style type="text/css">
+.main-container {
+  max-width: 3000px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+Sources: https://github.com/nychealth/coronavirus-data/master/latest/last7days-by-modzcta.csv
+
+https://github.com/nychealth/coronavirus-data/master/latest/7day-transmission-rate.csv
+
+https://github.com/nychealth/covid-vaccine-data/blob/main/people/coverage-by-modzcta-allages.csv
+
+
+
+library(ggplot2)
+library(ggthemes) 
+library(ggpubr)
+library(gridExtra)
+library(lubridate)
+library(tidyverse)
+library(ggpubr)
+library(viridis)
+library(yaml)
+library(rmarkdown)
+library(biscale)
+#library(knitr)
+library(plotly)
+library(conflicted)
+conflict_prefer("first", "dplyr")
+conflict_prefer("last", "dplyr")
+conflict_prefer("layout", "plotly")
+conflict_prefer("filter", "dplyr")
+
+setwd(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/",
+             "EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Reports/Transmission Trends/"))
+
+
+source("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Functions/bivariate_choropleth_map_function.R")
+source("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Functions/bi_legend_custom.R")
+source("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Functions/bi_class_custom.R")
+
+dirfig <- paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/",
+                 "EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Reports/Transmission Trends/")
+
+## 1. Load Data ----------------------------------------------------
+
+# Data, regularly updated
+positivity <- read.csv(
+  "https://raw.githubusercontent.com/nychealth/coronavirus-data/master/latest/last7days-by-modzcta.csv", stringsAsFactors = FALSE)
+
+vax <- read.csv(
+  "https://raw.githubusercontent.com/nychealth/covid-vaccine-data/main/people/coverage-by-modzcta-allages.csv")
+
+transmission <- read.csv(
+  "https://raw.githubusercontent.com/nychealth/coronavirus-data/master/latest/7day-transmission-rate.csv")
+
+uhf_names <- read.csv("https://raw.githubusercontent.com/nychealth/coronavirus-data/master/latest/now-transmission-by-uhf42.csv")
+
+# Neighborhood/MODZCTA info
+uhf_zips <- read.csv("UHFZips.csv")
+modzctas <- read.csv("https://raw.githubusercontent.com/nychealth/coronavirus-data/master/Geography-resources/ZCTA-to-MODZCTA.csv")
+
+## 2. Clean and Combine data ----------------------------------------------------------------------------
+
+colnames(vax) <- tolower(colnames(vax))
+colnames(transmission) <- str_remove(colnames(transmission), "UHF") 
+
+positivity %>%
+  group_by(modzcta)
+
+combo <- vax%>%
+  select(date, modzcta, perc_fully)%>%
+  left_join(positivity%>%
+              select(-daterange, -label, -adequately_tested),
+            by = c("modzcta" = "modzcta"))%>%
+  mutate(perc_fully = ifelse(perc_fully > 100, 100, perc_fully))
+
+transmission_clean <- transmission %>%
+  # Pivoting to long so it's easier to manipulate
+  pivot_longer(-week_end_date, names_to = "uhf", values_to = "transmission_rate") %>%
+  # Joining the UHF names
+  left_join(uhf_names %>% 
+              mutate(uhf = as.character(uhf)) %>%
+              select(uhf, neighborhood_name), 
+            by = c("uhf")) %>%
+  # Filtering out the borough and city values 
+  filter(!is.na(neighborhood_name)) %>%
+  # Formatting days
+  mutate(week_end_date = mdy(week_end_date)) %>%
+  mutate(Borough = case_when(uhf %in% 100:199 ~ "Bronx", 
+                             uhf %in% 200:299 ~ "Brooklyn", 
+                             uhf %in% 300:399 ~ "Manhattan",
+                             uhf %in% 400:499 ~ "Queens", 
+                             uhf %in% 500:599 ~ "Staten Island"),
+         text = paste0(neighborhood_name, "\n", 
+                       Borough, "\n",
+                       "Transmission Rate: ", transmission_rate))%>%
+  filter(week_end_date >= max(week_end_date) - 14) %>%
+  group_by(uhf) %>%
+  mutate(starting_transmission = first(transmission_rate),
+         ending_transmission = last(transmission_rate),
+         n_tx_change = ending_transmission - starting_transmission, 
+         perc_tx_change = round(n_tx_change/starting_transmission*100, 2)) %>%
+  filter(week_end_date == max(week_end_date)) %>%
+  ungroup()
+
+uhfcombo <- uhf_zips%>%
+  select(-Name)%>%
+  filter(!is.na(UHF)) %>%
+  mutate(UHF = as.character(UHF))%>%
+  left_join(transmission_clean%>%
+              select(-text),
+              by = c("UHF" = "uhf"))
+
+colnames(uhfcombo) <- tolower(colnames(uhfcombo))
+
+metrics_merged <- combo %>%
+  select(-date)%>%
+  mutate(modzcta = as.character(modzcta))%>%
+  left_join(uhfcombo %>%
+              mutate(zip = as.character(zip))%>%
+              select(-neighborhood_name, -borough),
+           by = c("modzcta" = "zip"))
+
+
+
+csv_by_date <- paste0("metrics_merged-", Sys.Date(), ".csv")
+write.csv(metrics_merged, csv_by_date)
+
+oldmetrics <- read.csv(paste0("metrics_merged-", Sys.Date()-7, ".csv"))
+
+newmetrics <- metrics_merged %>%
+   left_join(oldmetrics %>%
+                mutate(modzcta = as.character(modzcta))%>%
+               select(modzcta, transmission_rate),
+             by = c("modzcta" = "modzcta"))%>%
+  rename(transmission_rate_old = transmission_rate.y)%>%
+  rename(transmission_rate_new = transmission_rate.x)%>%
+   mutate(n_change = transmission_rate_new - transmission_rate_old,
+          perc_change = round(n_change/transmission_rate_old*100, 2))%>%
+   select(-starting_transmission, -ending_transmission, -n_tx_change, -perc_tx_change, -week_end_date)
+
+
+write.csv(newmetrics, "metrics_merged_with_percent_change_weekly.csv")
+
+image_height = 8
+image_width = 6
+
+
+
+# 1. Transmission and Testing Rate
+**Guide for interpretation:**
+Pink areas: high transmission, low testing. 
+Turquoise areas: low transmission, high testing.
+Dark blue areas: high transmission, high testing. 
+Grey areas: low transmission, low testing.
+
+
+title5 <- paste0("COVID-19 Transmission and Testing Rates for the week ending (", (metrics_merged$week_end_date) ,")")
+
+bi_test_transmission <- metrics_merged %>% 
+  mutate(modzcta = as.character(modzcta))%>%
+  biscale::bi_class(x = median_daily_test_rate, y = transmission_rate, keep_factors = TRUE) %>%
+  rename(bi_tt = bi_class) %>%
+  filter(!str_detect(bi_tt, "NA")) %>%
+  select(modzcta, bi_tt) %>% 
+  bivariate_choropleth(bi_tt, 
+                       join_on = "modzcta",
+                       #plot_subtitle = title5,
+                       plot_caption = str_wrap("Data Source: NYC DOHMH COVID-19 Data Page", 50)
+  )
+
+ggsave("transmission_test.png")
+
+# Needed for custom legend function
+factors <-metrics_merged %>% 
+  bi_class_custom(x = median_daily_test_rate, y = transmission_rate, keep_factors = TRUE) %>%
+  filter(!is.na(bi_x))
+
+#options(scipen = 999)
+tt_legend <- bi_legend_custom(pal = "DkBlue", dim = 3, size = 16,
+                              xlab = "Test Rate",
+                              ylab = "Transmission Rate")
+
+
+ggsave("transmission_test_legend.png")
+
+grid.arrange(bi_test_transmission, tt_legend, ncol=2)
+
+footnotes <- paste0("<p style='font-size:14px'> Guide for interpretation: </p>
+                     <ol style= 'font-size:14px'>
+                    <li> Pink areas: high transmission, low testing.</li>
+                    <li> Turquoise areas: low transmission, high testing.</li>
+                   <li> Dark blue areas: high transmission, high testing.</li> 
+                    <li> Grey areas: low transmission, low testing.</li> 
+                    </ol>")
+
+grid.arrange(bi_test_transmission, tt_legend, ncol=2)
+
+TestTrans_grid_png <- arrangeGrob(bi_test_transmission, tt_legend, ncol=2) 
+ ggsave(file="test_trans_grid.png", TestTrans_grid_png)
+
+
+
+# 2. Percent Positivity and Vaccination
+**Guide for interpretation:**
+Pink areas: high percent positivity, low vaccination rate. 
+Turquoise areas: low percent positivity, high vaccination rate.
+Dark blue areas: high percent positivity, high vaccination rate. 
+Grey areas: low percent positivity, low vaccination rate. 
+```{r, include = FALSE}
+title6 <- paste0("COVID-19 Percent Positivity and Percent Vaccinated for the week ending (", (metrics_merged$week_end_date) ,")")
+
+VaxPP_bi_perc_percfully <- metrics_merged  %>% 
+  mutate(modzcta = as.character(modzcta))%>%
+  biscale::bi_class(x = perc_fully, y = percentpositivity_7day, keep_factors = TRUE) %>%
+  rename(bi_vp = bi_class) %>%
+  filter(!str_detect(bi_vp, "NA")) %>% 
+  select(modzcta, bi_vp) %>% 
+  bivariate_choropleth(bi_vp, 
+                       join_on = "modzcta",
+                       #plot_title = "Refusal by change in refusal for contacts",
+                       #plot_subtitle = title6,
+                       plot_caption = str_wrap("Data Source: NYC DOHMH COVID-19 Data Page", 50)
+  )
+ggsave("vax_positivity.png")
+
+
+factors <- metrics_merged %>% 
+  bi_class_custom(x = perc_fully, y = percentpositivity_7day, keep_factors = TRUE) %>%
+  filter(!is.na(bi_x))
+
+VaxPP_vax_legend <- bi_legend_custom(pal = "DkBlue", dim = 3, size = 16,
+                                     xlab = "Vaccination Rate",
+                                     ylab = "Percent Positivity")
+ggsave("vax_positivity_legend.png")
+
+
+footnotes2 <- paste0("<p style='font-size:14px'> Guide for interpretation: </p>
+                     <ol style= 'font-size:14px'>
+                    <li> Pink areas: high percent positivity, low vaccination rate.</li>
+                    <li> Turquoise areas: low percent positivity, high vaccination rate.</li>
+                   <li> Dark blue areas: high percent positivity, high vaccination rate.</li> 
+                    <li> Grey areas: low percent positivity, low vaccination rate.</li> 
+                    </ol>")
+
+
+grid.arrange(VaxPP_bi_perc_percfully, VaxPP_vax_legend, ncol=2)
+
+
+VaxPP_grid_png <- arrangeGrob(VaxPP_bi_perc_percfully, VaxPP_vax_legend, ncol=2) 
+ ggsave(file="vax_positivity_grid.png", VaxPP_grid_png)
+
+
+# 3. Transmission Rate and Vaccination
+**Guide for interpretation:**
+Pink areas: high transmission, low vaccination rate. 
+Turquoise areas: low transmission, high vaccination rate.
+Dark blue areas: high transmission, high vaccination rate. 
+Grey areas: low transmission, low vaccination rate. 
+```{r, include=FALSE}
+title7 <- paste0("COVID-19 Transmission Rate and Percent Vaccinated for the week ending (", (metrics_merged$week_end_date) ,")")
+
+bi_vax_transmission <- metrics_merged %>% 
+  mutate(modzcta = as.character(modzcta))%>%
+  biscale::bi_class(x = perc_fully, y = transmission_rate, keep_factors = TRUE) %>%
+  rename(bi_vt = bi_class) %>%
+  filter(!str_detect(bi_vt, "NA")) %>% 
+  select(modzcta, bi_vt) %>% 
+  bivariate_choropleth(bi_vt, 
+                       join_on = "modzcta",
+                       #plot_title = "Refusal by change in refusal for contacts",
+                       #plot_subtitle = title7,
+                       plot_caption = str_wrap("Data Source: NYC DOHMH COVID-19 Data Page", 50)
+  )
+ggsave("vax_transmission.png")
+
+# Needed for custom legend function
+factors <-metrics_merged %>% 
+  bi_class_custom(x = perc_fully, y = transmission_rate, keep_factors = TRUE) %>%
+  filter(!is.na(bi_x))
+
+vt_legend <- bi_legend_custom(pal = "DkBlue", dim = 3, size = 16,
+                              xlab = "Vaccination Rate",
+                              ylab = "Transmission Rate")
+ggsave("vax_transmission_legend.png")
+
+
+footnotes3 <- paste0("<p style='font-size:14px'> Guide for interpretation: </p>
+                     <ol style= 'font-size:14px'>
+                    <li> Pink areas: high transmission, low vaccination rate.</li>
+                    <li> Turquoise areas: low transmission, high vaccination rate.</li>
+                   <li> Dark blue areas: high transmission, high vaccination rate.</li> 
+                    <li> Grey areas: low transmission, low vaccination rate.</li> 
+                    </ol>")
+
+grid.arrange(bi_vax_transmission, vt_legend, ncol=2)
+
+
+VaxTrans_grid_png <- arrangeGrob(bi_vax_transmission, vt_legend, ncol=2) 
+ ggsave(file="vax_trans_grid.png", VaxTrans_grid_png)
+
+
+# 4. Transmission and Percent Positivity 
+**Guide for interpretation:**
+Pink areas: high transmission, low percent positivity. 
+Turquoise areas: low transmission, high percent positivity.
+Dark blue areas: high transmission, high percent positivity. 
+Grey areas: low transmission, low percent positivity. 
+```{r, include = FALSE}
+title8 <- paste0("COVID-19 Transmission Rate and Percent Positivity for the week ending (", (metrics_merged$week_end_date) ,")")
+
+bi_positivity_transmission <- metrics_merged %>% 
+  mutate(modzcta = as.character(modzcta))%>%
+  biscale::bi_class(x = percentpositivity_7day, y = transmission_rate, keep_factors = TRUE) %>%
+  rename(bi_pt = bi_class) %>%
+  filter(!str_detect(bi_pt, "NA")) %>% 
+  select(modzcta, bi_pt) %>% 
+  bivariate_choropleth(bi_pt, 
+                       join_on = "modzcta",
+                       #plot_title = "Refusal by change in refusal for contacts",
+                       #plot_subtitle = title8,
+                       plot_caption = str_wrap("Data Source: NYC DOHMH COVID-19 Data Page", 50)
+  )
+ggsave("positivity_transmission.png")
+
+
+# Needed for custom legend function
+factors <- metrics_merged %>% 
+  bi_class_custom(x = percentpositivity_7day, y = transmission_rate, keep_factors = TRUE) %>%
+  filter(!is.na(bi_x))
+
+pt_legend <- bi_legend_custom(pal = "DkBlue", dim = 3, size = 16,
+                              xlab = "Percent Positivity",
+                              ylab = "Transmission Rate")
+ggsave("positivity_transmission_legend.png")
+
+
+footnotes4 <- paste0("<p style='font-size:14px'> Guide for interpretation: </p>
+                     <ol style= 'font-size:14px'>
+                    <li> Pink areas: high transmission, low percent positivity.</li>
+                    <li> Turquoise areas: low transmission, high percent positivity.</li>
+                   <li> Dark blue areas: high transmission, high percent positivity.</li> 
+                    <li> Grey areas: low transmission, low percent positivity.</li> 
+                    </ol>")
+
+grid.arrange(bi_positivity_transmission, pt_legend, ncol=2)
+
+
+
+TransPP_grid_png <- arrangeGrob(bi_positivity_transmission, pt_legend, ncol=2) 
+ ggsave(file="trans_positivity_grid.png", TransPP_grid_png)
