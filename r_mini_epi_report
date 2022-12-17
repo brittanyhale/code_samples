@@ -1,0 +1,620 @@
+options(java.parameters = c("-XX:+UseConcMarkSweepGC", "-Xmx819200m"))
+"%notin%" <- Negate("%in%")
+library(dplyr)
+library(dbplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(ggpubr)
+library(ggrepel)
+library(janitor)
+library(scales)
+library(knitr)
+library(kableExtra)
+library(mailR)
+library(forcats)
+library(grid)
+library(zoo)
+library(gridExtra)
+library(MMWRweek)
+library(conflicted)
+library(openxlsx)
+library(mailR)
+library(biscale)
+conflict_prefer("crosstab", "janitor")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("year", "lubridate")
+conflict_prefer("mutate", "dplyr")
+conflict_prefer("week", "lubridate")
+conflict_prefer("month", "lubridate")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("wday", "lubridate")
+conflict_prefer("lag", "dplyr")
+conflict_prefer("last", "dplyr")
+conflict_prefer("first", "dplyr")
+conflict_prefer("between", "dplyr")
+conflict_prefer("summarize", "dplyr")
+conflict_prefer("arrange", "dplyr")
+
+## set working directory
+setwd(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/", 
+             "EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Reports/Mini Epi-Report/"))
+
+## load data function
+source(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/",
+              "EmergencyEvents/2019_nCoV/T2D2/Database Development/LOAD_DATA_RECODE/",
+              "load_data_function_v2.1.R")) 
+
+### Load disposition definitions
+source(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/",
+              "EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Reports/",
+              "Daily email report/production/disposition_definitions.R"))
+
+source(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/EmergencyEvents/",
+              "2019_nCoV/T2D2/Analyses and Reports/__Functions/make_graph_weekly_function_v2.R"))
+
+### directory for figures
+dirfig <- paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/",
+                 "EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/",
+                 "__Reports/Mini Epi-Report/figures/")
+
+source(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/",
+              "EmergencyEvents/2019_nCoV/T2D2/Database Development/LOAD_DATA_RECODE/load_data_function_v2.1.R"))
+
+source(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/EmergencyEvents/",
+              "2019_nCoV/T2D2/Analyses and Reports/__Functions/make_graph_weekly_function_v2.R"))
+
+source(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/EmergencyEvents/",
+              "2019_nCoV/T2D2/Analyses and Reports/__Functions/make_graph_monthly_function.R"))
+
+source(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/",
+              "EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Reports/",
+              "Transmission Trends/bivariate_script_for_miniepi_cronjob.R"))
+
+TRIE_df <- read.csv(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/", 
+                        "EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Resources/vax_trie_neighborhood_zips.csv"))
+
+
+## Load Data
+source(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/",
+              "EmergencyEvents/2019_nCoV/T2D2/Database Development/LOAD_DATA_RECODE/load_data_function_v2.1.R"))
+result <- load_data(tablename = "result")
+interaction <- load_data(tablename = "interaction", intake_only = TRUE)
+contact <- load_data(tablename = "contact")
+
+image_height = 5
+image_width = 8
+
+### Linelist and flags ####
+#A# From daily report code
+
+
+
+# Last 3 months of data
+# for weekly figures
+start_date <- Sys.Date() - 12*7
+last_end <- max(result$week_start)+6
+
+base_mini_epi <- interaction %>%
+  select(-createddate, -week_start) %>%
+  filter(recordtypeid == "Case Investigation") %>%
+  #rename(week_start_interaction = week_start) %>% 
+  inner_join(result %>%
+               mutate(case_contact = case_when(
+                 recordtype == "Case" & salesforce_contact_id!="" & !is.na(salesforce_contact_id) ~ "Case",
+                 recordtype == "Exposed" & salesforce_contact_id!="" & !is.na(salesforce_contact_id) ~ "Contact")) %>% 
+               filter(!is.na(case_contact)), by = c("result__c" = "salesforce_result_id"), keep = TRUE) %>% 
+  filter(week_start >= start_date,
+         Sys.Date() - week_start >= 7) %>% 
+  filter(disposition__c != "Duplicate / Already Completed") %>% 
+  left_join(contact %>% 
+              select(salesforce_id, 
+                     age_group, 
+                     age_group_detailed,
+                     race, 
+                     boro_final, 
+                     modzcta_10,
+                     is_contact_hispanic_latino_latina__c,
+                     language_preference__c,
+                     speak_english__c,
+                     other_language__c), 
+            by = c("salesforce_contact_id" = "salesforce_id")) %>%
+  left_join(TRIE_df %>%
+              mutate(MODZCTA = as.character(MODZCTA))%>%
+              select(-Borough),
+            by = c("modzcta_10" = "MODZCTA"))%>%
+  mutate(TRIE = case_when(is.na(RIE_TF_Priority_Neighborhood) ~ "Not TRIE",
+                          RIE_TF_Priority_Neighborhood == "" ~ "Not TRIE",
+                          !is.na(RIE_TF_Priority_Neighborhood) ~ "TRIE",
+                          RIE_TF_Priority_Neighborhood != "" ~ "TRIE"))
+
+
+
+## EPICURVE TABLE
+cases_gg <- base_mini_epi %>%
+  filter(recordtypeid == "Case Investigation") %>%
+  arrange(person_id, createddate) %>%
+  distinct(person_id, .keep_all = T) %>%
+  group_by(week_start) %>%
+  summarize(cases = n())
+
+
+conflict_prefer("summarise", "dplyr")
+scale <- 200
+symptoms <- base_mini_epi %>%
+  filter(disposition__c %in% completed) %>%
+  group_by(week_start) %>%
+  summarise(number = n(),
+            percent = sum(ifelse(ever_symptomatic==1,1,0))/number*100,
+            recordtype = "Case Investigation") %>%
+  left_join(cases_gg, by = c("week_start"))%>%
+  ggplot(aes(x = week_start)) +
+  geom_bar(aes(y = cases, fill = "bar.label"), stat = "identity") +
+  labs(x = "Date", y = "Cases", title = "Symptomatic Cases, of all completing intake") +
+   scale_fill_manual(values = c("bar.label" = "#56B4E9"),
+                     labels = c("Total cases"),
+                     name = NULL) +
+  geom_line(aes(x = week_start, y = percent*scale, color = "line.label"),
+            size = 2) +
+  scale_color_manual(values = c("line.label" = "#FFA500"),
+                     labels = c("% of records"),
+                     name = NULL) +
+  theme_minimal() + 
+  geom_text(aes(y = (percent*scale), label = paste0(round(percent,0)," %")), vjust = -1, size = 4) +
+           geom_point(aes(y = percent*scale), color = "#FFA500", size = 3) +
+  #geom_text_repel(aes(y = (percent*scale), label = paste0(round(percent,0)," %")), vjust = 1, size = 3) +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  scale_y_continuous(sec.axis =
+                       sec_axis(~ . / scale, name = "% of records",
+                                breaks = function(x) seq(from = 0, to = max(100), by = 20))) +
+  scale_x_date(date_labels = "%m-%d", expand= c(0,0), 
+               breaks = seq(min(base_mini_epi$week_start), max(base_mini_epi$week_start), 
+                            by = "7 days")) +
+  theme(axis.text.y = element_text(size = 11, angle = 0, margin = margin(10, 30, 30, 30)),
+        axis.text.y.right = element_text(size = 11, angle = 0, margin = margin(30, 30, 30, 10)),
+        axis.text.x = element_text(size = 11, angle = 90, hjust = 0.5, vjust = 0.5, margin=margin(b=20)),
+        axis.title = element_text(size = 12),
+        legend.text = element_text(size = 12),
+        legend.key = element_blank(),
+        legend.position = "bottom",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank())
+
+symptoms + ggsave("symptomatic_cases.png",
+       path = "Figures",
+       dpi = 96,
+       units = "in",
+       height = 5,
+       width = 8)
+
+
+base_mini_epi %>% 
+  filter(boro_final %notin% c("", NA, "Other/Outside NYC", "Unknown")) %>%
+  arrange(desc(createddate)) %>%
+  distinct(person_id, .keep_all = T) %>%
+  group_by(week_start, boro_final) %>% 
+  tally(name = "number") %>% 
+  mutate(percent = number / sum(number) * 100) %>%
+  grouped_line_graph(week_start, number, group = boro_final,
+                     y_axis = "Total Cases",
+                     group_name = "Borough",
+                     plot_title = "Case Counts by Borough") +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90, size = 10, vjust = 0.5)) 
+
+
+
+# trie_combo %>% 
+# #  filter(recordtypeid == "Case Investigation",
+# #         !is.na(TRIE)) %>%
+#   filter(recordtypeid %in% c("Case Investigation"),
+#          !is.na(TRIE), 
+#          week_start >= as.Date("2022-01-01")) %>%
+#   arrange(desc(createddate)) %>%
+#   group_by(week_start,TRIE) %>%
+#   tally(name = "number") %>% 
+#   mutate(percent = number / sum(number) * 100)%>%
+# #  summarise(number = sum(complete_intake,na.rm=TRUE),
+# #            percent=round(number/
+# #                           n()*100,0)) %>%
+#   ggplot(aes(x=week_start,y=percent,group=TRIE,fill=TRIE)) +
+#   geom_bar(position = "dodge", stat="identity") +
+#   #scale_y_continuous(breaks = function(y) seq(0, 100, 10)) +
+#   theme_minimal() +
+#   scale_x_date(breaks = function(x) seq.Date(from = as.Date("2022-01-01"), to = as.Date("2022-05-01"), by = "1 week"),
+#                date_labels = "%m-%d") +
+#   labs(x="Date",
+#        y="Percent of Cases",
+#        title = "TRIE, as a % of total cases") 
+
+scale2 <- 300
+trie_figure <- base_mini_epi %>%
+  filter(!is.na(TRIE)) %>%
+  arrange(desc(createddate)) %>%
+  distinct(person_id, .keep_all = T)   %>% 
+  arrange(desc(createddate)) %>%
+  group_by(week_start,TRIE) %>%
+  tally(name = "number") %>% 
+  mutate(percent = number / sum(number) * 100) %>%
+  left_join(cases_gg, by = c("week_start"))%>%
+  filter(TRIE %in% "TRIE")%>%
+  ggplot(aes(x = week_start)) +
+  geom_bar(aes(y = cases, fill = "bar.label"), stat = "identity") +
+  labs(x = "Date", y = "Cases", title = "TRIE Neighborhoods, as a % of total cases") +
+  scale_fill_manual(values = c("bar.label" = "#56B4E9"),
+                    labels = c("Total cases"),
+                    name = NULL) +
+  geom_line(aes(x = week_start, y = percent*scale2, color = TRIE),
+            size = 2) +
+  scale_color_manual(values = c("#FFA500","#FFA500"),
+                     labels = c("TRIE", "TRIE"),
+                     name = NULL) +
+  theme_minimal() + 
+  geom_text(aes(y = (percent*scale2), label = paste0(round(percent,0)," %")), vjust = -1, size = 4) +
+  geom_point(aes(y = percent*scale2), color = "#FFA500", size = 3) +
+  #geom_text_repel(aes(y = (percent*scale2), label = paste0(round(percent,0)," %")), vjust = 1, size = 3) +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  scale_y_continuous(sec.axis =
+                       sec_axis(~ . / scale2, name = "% of records",
+                                breaks = function(x) seq(from = 0, to = max(100), by = 20))) +
+  scale_x_date(date_labels = "%m-%d", expand= c(0,0), 
+               breaks = seq(min(base_mini_epi$week_start), max(base_mini_epi$week_start), 
+                            by = "7 days"))  +
+  theme(axis.text.y = element_text(size = 11, angle = 0, margin = margin(10, 30, 30, 30)),
+        axis.text.y.right = element_text(size = 11, angle = 0, margin = margin(30, 30, 30, 10)),
+        axis.text.x = element_text(size = 11, angle = 90, hjust = 0.5, vjust = 0.5, margin=margin(b=20)),
+        axis.title = element_text(size = 12),
+        legend.text = element_text(size = 12),
+        legend.key = element_blank(),
+        legend.position = "bottom",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank()) 
+  
+
+trie_figure + ggsave("completed_intake_by_trie.png",
+              path = "Figures",
+              dpi = 96,
+              units = "in",
+              height = 6,
+              width = 8)
+#png(paste0(dirfig,"completed_intake_by_trie.png"), width = 900, height = 500, res = 96)
+
+dev.off()
+
+
+## Borough
+
+base_mini_epi %>% 
+  filter(boro_final %notin% c("", NA, "Other/Outside NYC", "Unknown")) %>%
+  arrange(desc(createddate)) %>%
+  distinct(person_id, .keep_all = T) %>%
+  group_by(week_start, boro_final) %>% 
+  tally(name = "number") %>% 
+  mutate(percent = number / sum(number) * 100) %>%
+  grouped_line_graph(week_start, percent, group = boro_final,
+                     y_axis = "Percent of Cases",
+                     group_name = "Borough",
+                     plot_title = "Borough, as a % of total cases",
+                     plot_caption = paste0("Numerator: unique cases, by Borough\n",
+                                           "Denominator: unique cases where the Borough is known")) +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90, size = 10, vjust = 0.5)) +
+  ggsave("borough_percentcases.png",
+         path = "Figures",
+         dpi = 96,
+         units = "in",
+         height = 4,
+         width = 8)
+
+base_mini_epi %>% 
+  filter(boro_final %notin% c("", NA, "Other/Outside NYC", "Unknown")) %>%
+  arrange(desc(createddate)) %>%
+  distinct(person_id, .keep_all = T) %>%
+  group_by(week_start, boro_final) %>% 
+  tally(name = "number") %>% 
+  mutate(percent = number / sum(number) * 100) %>%
+  grouped_line_graph(week_start, number, group = boro_final,
+                     y_axis = "Percent of Cases",
+                     group_name = "Borough",
+                     plot_title = "Case Counts by Borough") +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90, size = 10, vjust = 0.5)) +
+  ggsave("case_count_borough.png",
+         path = "Figures",
+         dpi = 96,
+         units = "in",
+         height = 6,
+         width = 11)
+
+
+base_mini_epi %>% 
+  filter(age_group_detailed != "Unknown") %>%
+  arrange(desc(createddate)) %>%
+  distinct(person_id, .keep_all = T) %>%
+  group_by(week_start, age_group) %>% 
+  tally(name = "number") %>% 
+  left_join(base_mini_epi %>% 
+              filter(age_group_detailed != "Unknown") %>%
+              arrange(desc(createddate)) %>%
+              distinct(person_id, .keep_all = T) %>%
+              group_by(week_start) %>% 
+              tally(name = "total"),
+            by = c("week_start")) %>% 
+  mutate(percent = number / total * 100) %>%
+  grouped_line_graph(week_start, percent, group = age_group,
+                     y_axis = "Percent of Cases",
+                     group_name = "Age Group",
+                     plot_title = "Age, as a % of total cases",
+                     plot_caption = paste0("Numerator: unique cases, by age\n",
+                                           "Denominator: unique cases where the age is known")) +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90, size = 10, vjust = 0.5)) + 
+  ggsave("age_city.png",
+         path = "Figures",
+         dpi = 96,
+         units = "in",
+         height = 4,
+         width = 8)
+
+base_mini_epi %>% 
+  filter(age_group_detailed != "Unknown" & 
+           boro_final %notin% c(NA, "", "Unknown", "Other/Outside NYC")) %>%
+  arrange(desc(createddate)) %>%
+  distinct(person_id, .keep_all = T) %>%
+  group_by(week_start, boro_final, age_group) %>% 
+  tally(name = "number") %>% 
+  left_join(base_mini_epi %>% 
+              filter(age_group_detailed != "Unknown" & 
+                       boro_final %notin% c(NA, "", "Unknown", "Other/Outside NYC")) %>%
+              arrange(desc(createddate)) %>%
+              distinct(person_id, .keep_all = T) %>%
+              group_by(week_start, boro_final) %>% 
+              tally(name = "total"),
+            by = c("week_start", "boro_final")) %>% 
+  mutate(percent = number / total * 100) %>%
+  grouped_line_graph(week_start, percent, group = age_group,
+                     y_axis = "Percent of Cases",
+                     group_name = "Age Group",
+                     plot_title = "Age, as a % of total cases",
+                     plot_caption = paste0("Numerator: unique cases, by age\n",
+                                           "Denominator: unique cases where the age is known")) +
+  facet_grid(rows = vars(boro_final)) +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90, size = 8, vjust = 0.5)) +
+  ggsave("age_borough.png",
+       path = "Figures",
+       dpi = 96,
+       units = "in",
+       height = 6,
+       width = 11)
+
+
+base_mini_epi %>% 
+  filter(age_group_detailed != "Unknown") %>%
+  filter(age_group_detailed %in% c("5-12", "13-17", "18-24", "25-34", "35-44")) %>%
+  arrange(desc(createddate)) %>%
+  distinct(person_id, .keep_all = T) %>%
+  group_by(week_start, age_group_detailed) %>% 
+  tally(name = "number") %>% 
+  left_join(base_mini_epi %>% 
+              filter(age_group_detailed != "Unknown") %>%
+              arrange(desc(createddate)) %>%
+              distinct(person_id, .keep_all = T) %>%
+              group_by(week_start) %>% 
+              tally(name = "total"),
+            by = c("week_start")) %>% 
+  mutate(percent = number / total * 100) %>%
+  grouped_line_graph(week_start, percent, group = age_group_detailed,
+                     y_axis = "Total Cases",
+                     group_name = "Age Group",
+                     plot_title = "Age, as a % of total cases",
+                     plot_caption = paste0("Numerator: unique cases, by age\n",
+                                           "Denominator: unique cases where the age is known")) +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90, size = 10, vjust = 0.5)) 
+
+
+base_mini_epi %>% 
+  filter(age_group_detailed != "Unknown") %>%
+  filter(age_group_detailed %in% c("18-24", "25-34", "35-44")) %>%
+  arrange(desc(createddate)) %>%
+  distinct(person_id, .keep_all = T) %>%
+  group_by(week_start, age_group_detailed) %>% 
+  tally(name = "number") %>% 
+  left_join(base_mini_epi %>% 
+              filter(age_group_detailed != "Unknown") %>%
+              arrange(desc(createddate)) %>%
+              distinct(person_id, .keep_all = T) %>%
+              group_by(week_start) %>% 
+              tally(name = "total"),
+            by = c("week_start")) %>% 
+  mutate(percent = number / total * 100) %>%
+  grouped_line_graph(week_start, percent, group = age_group_detailed,
+                     y_axis = "Total Cases",
+                     group_name = "Age Group",
+                     plot_title = "Ages 18-44, as a % of total cases",
+                     plot_caption = paste0("Numerator: unique cases, by age\n",
+                                           "Denominator: unique cases where the age is known")) +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90, size = 10, vjust = 0.5))
+
+
+## 7-day  change in the 7 day average
+seven_day_change <- interaction %>%
+  select(-c(createddate)) %>%
+  filter(recordtypeid == "Case Investigation") %>%
+  rename(week_start_interaction = week_start) %>% 
+  filter(week_start_interaction >= "2022-01-15")%>%
+  inner_join(result %>%
+               mutate(case_contact = case_when(
+                 recordtype == "Case" & salesforce_contact_id!="" & !is.na(salesforce_contact_id) ~ "Case",
+                 recordtype == "Exposed" & salesforce_contact_id!="" & !is.na(salesforce_contact_id) ~ "Contact")) %>% 
+               filter(!is.na(case_contact)), by = c("result__c" = "salesforce_result_id"), keep = TRUE) %>% 
+  filter(#week_start >= start_date
+         #week_start >= as.Date("2021-06-01") 
+          recordtype == "Case") %>% 
+  filter(disposition__c != "Duplicate / Already Completed") %>%
+  #arrange(desc(createddate)) %>%
+  #distinct(person_id, .keep_all = T) %>%
+  group_by(createddate) %>%
+  summarise(n_all = n()) %>%
+  mutate(sevenday_avg = round(rollmean(n_all, 7, fill = NA, align = "right"), 0), 
+         week_day = wday(createddate, label = TRUE)) %>%
+  select(createddate, n_all, sevenday_avg) %>%
+  mutate(net_change = sevenday_avg - lag(sevenday_avg, n = 7),
+         perc_change = round(net_change/lag(sevenday_avg, n = 7)*100, 0),
+         fill_name = " ") %>%
+  filter(!is.na(net_change))
+
+scale_factor <- 50
+
+seven_day_change %>%
+  ggplot(aes(x = createddate))+
+  geom_bar(aes(y = n_all, fill = fill_name), stat = "identity") +
+  scale_colour_manual(values = c("#5A9BD4"), aesthetics = c("fill")) +
+#  geom_line(aes(x = createddate, y = perc_change*scale_factor, linetype = " "), color="#FAA75B", size = 2)+
+  scale_x_date(date_labels = "%b-%d", expand= c(0,0), 
+               breaks = seq(min(seven_day_change$createddate), max(seven_day_change$createddate), 
+                            by = "7 days")) +
+  labs(title = "Daily Cases: 7 Day Average", 
+       y="Daily Cases (7 day average)", x="Week End Date",  color=NULL, fill="Daily Cases (7 day average)", 
+       linetype = "Percent Change in Last 7 Days (%)") +
+  scale_y_continuous(breaks = seq(from=0, to=54000, by = 2000)) +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 90, size = 10, vjust = 0.5),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 12), 
+        axis.title.x = element_text(size = 12, vjust = 0), 
+        legend.title = element_text(size = 10), 
+        legend.text = element_text(size = 10), 
+        legend.position = "bottom",
+        plot.title = element_text(size = 16),
+        plot.caption = element_text(hjust = 0, vjust = 0)) +
+  ggsave("seven_day_rolling.png",
+         path = "Figures",
+         dpi = 96,
+         units = "in", height = 4, width = 8)
+
+### source file for soi tables
+source(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/EmergencyEvents/",
+              "2019_nCoV/T2D2/Analyses and Reports/__Reports/Mini Epi-Report/soi_questions.R"))
+
+
+
+setwd(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/", 
+             "EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Reports/Mini Epi-Report/"))
+
+### load css function
+source(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/",
+              "EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Reports/standard_css.R"))
+
+email <- paste0("<!DOCTYPE html><html><head>", 
+                css,
+                "</head><body><div>",
+                "<h2> Mini Epi Report, as of  ", Sys.Date()-1, 
+                "<p></p>",
+                "<p></p>",
+                "<p></p>",
+                "<h3>Contents</h3>",
+                "<ol>
+                <li style='font-size:14px'><a href='#Figure0'> Rolling 7 Day Average Cases </a></li>
+                <li style='font-size:14px'><a href='#Figure1'> Percent of Cases by Age </a></li>
+                <li style='font-size:14px'><a href='#Figure2'> Percent of Cases by Borough </a></li>
+                <li style='font-size:14px'><a href='#Figure3'> Percent of Cases by TRIE Neighborhood </a></li>
+                <li style='font-size:14px'><a href='#Figure4'> Symptomatic Cases </a></li>
+                <li style='font-size:14px'><a href='#Figure5'> Top 5 Highest Net Change in Transmission </a></li>
+                <li style='font-size:14px'><a href='#Figure6'> Top 5 Overall Highest Transmission </a></li>
+                <li style='font-size:14px'><a href='#Figure7'> Transmission Rate vs Testing Rate Plots</a></li>
+                <li style='font-size:14px'><a href='#Figure8'> Percent Positivity vs Vaccination Rate</a></li>
+                <li style='font-size:14px'><a href='#Figure9'> Transmission Rate vs Vaccination Rate</a></li>
+                <li style='font-size:14px'><a href='#Figure10'> Transmission Rate vs Percent Positivity</a></li>
+                <li style='font-size:14px'><a href='#Figure11'> Likely locations of infection</a></li>
+                <li style='font-size:14px'><a href='#Figure12'> Interaction types at likely time of infection </a></li>
+                </ol>",
+                "</h2>",
+                "<p></p>", "<p></p>",
+                "<p></p>","<hr>",
+                "<h3> Rolling 7 Day Average Cases </h3>",
+                '<img src="Figures/seven_day_rolling.png">',
+                "<p></p>", 
+                "<p></p>","<hr>",
+                "<h3> Percent of Cases by Age </h3>",
+                '<img src="Figures/age_city.png">',
+                "<p></p>", 
+               "<p></p>","<hr>",
+               "<h3> Percent of Cases by Borough </h3>",
+               '<img src="Figures/borough_percentcases.png">',
+               "<p></p>", 
+               "<p></p>","<hr>",
+                "<h3> Percent of Cases by TRIE Neighborhood </h3>",
+                '<img src="Figures/completed_intake_by_trie.png">',
+                "<p></p>", 
+                "<p></p>","<hr>",
+                "<h3> Symptomatic Cases </h3>",
+                '<img src="Figures/symptomatic_cases.png">',
+                "<p></p>", 
+                "<p></p>","<hr>",
+                "<h3> Top 5 Highest Net Change in Transmission in the last 14 days </h3>",
+                "<p><a name='Top10Fig_ggplot'></a></p>",
+                '<img src="Figures/top10_netchange.png">', 
+                "<p></p>",
+                "<p></p>", "<hr>",
+                "<h3> Top 5 Overall Highest Transmission Levels in the last 14 days</h3>",
+                "<p><a name='Top10_highestFig_ggplot'></a></p>",
+                '<img src="Figures/top10_overall.png">', 
+                "<p></p>",
+                "<p></p>","<hr>",
+                '<h3><span style="color:#BE64AC;"> Transmission</span> <span style="color:black;">and</span> <span style="color:#5AC8C8;">Testing</span> <span style="color:black;">Rates</span></h3>',
+                "<p><a name='TestTrans_grid_png'></a></p>",
+                '<img src="Figures/test_trans_grid.png">',
+                "<p></p>", 
+                footnotes5,
+                "<p></p>", "<hr>", 
+                '<h3><span style="color:#BE64AC;"> Percent Positivity</span> <span style="color:black;">and</span> <span style="color:#5AC8C8;">Vaccination</span></h3>',
+                "<p><a name='VaxPP_grid_png'></a></p>",
+                '<img src="Figures/vax_positivity_grid.png">', 
+                "<p></p>", footnotes2,
+                "<p></p>", "<hr>",
+                '<h3><span style="color:#BE64AC;"> Transmission</span> <span style="color:black;">and</span> <span style="color:#5AC8C8;">Vaccination</span></h3>',
+                "<p><a name='VaxTrans_grid_png'></a></p>",
+                '<img src="Figures/vax_trans_grid.png">', 
+                "<p></p>", footnotes3,
+                "<p></p>", "<hr>", 
+                '<h3><span style="color:#BE64AC;"> Transmission</span> <span style="color:black;">and</span> <span style="color:#5AC8C8;">Percent Positivity</span></h3>',
+                "<p><a name='TransPP_grid_png'></a></p>",
+                '<img src="Figures/trans_positivity_grid.png">', 
+                "<p></p>", footnotes4,
+                "<p></p>",
+                 "<h3><a name='Table3'>Likely locations of infection among cases who believe they know where they were infected with COVID since March 25, 2022<sup>1,2,11,22</sup></a></h3>",
+                '<img src="Figures/Gathering locations__Case.png">',
+                "<p></p>",
+                "<h3><a name='Table4'> Reported nature of interaction with source case among cases who believe they were exposed to COVID through an interaction with a specific person since March 25, 2022<sup>1,2,23</sup></a></h3>",
+                '<img src="Figures/Interaction type__Case.png">',
+               "<p></p>",
+                "</div></body></html>")
+
+send.mail(from = "<bhale@health.nyc.gov>", 
+          replyTo = "<haleb@nychhc.org>", 
+          to = "<haleb@nychhc.org>",
+          # to = c("<haleb@nychhc.org>",
+          # "emails"),
+          subject = paste0("Mini Epi Report ", Sys.Date()-1), 
+          html = TRUE,
+          inline = TRUE,
+          body = email,
+          smtp = list(
+            host.name = "app22csmtp.health.dohmh.nycnet",
+            port = 25,
+            user.name = "",
+            passwd = "",
+            ssl = F),
+          authenticate = T,
+          send = T,
+          debug = T)
+
+
