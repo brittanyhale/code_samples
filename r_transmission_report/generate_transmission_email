@@ -1,0 +1,84 @@
+library(mailR)
+library(rmarkdown)
+library(knitr)
+library(conflicted)
+conflict_prefer("arrange", "dplyr")
+
+dirfig <- paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/",
+                 "EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/",
+                 "__Reports/Transmission Trends/transmission pngs/")
+
+
+### load css function
+source(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/",
+              "EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Reports/standard_css.R"))
+
+## Knit Report -----------------------------------------------------------------------------------------------------------------------
+setwd(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/",
+             "EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Reports/Transmission Trends/"))
+
+report_name <- paste0("transmission-trends-", Sys.Date(), ".html")
+
+
+Sys.setenv(RSTUDIO_PANDOC="/usr/lib/rstudio-server/bin/pandoc")
+rmarkdown::render(paste0("~/networkDrives/smb-share:server=naslocshare240,share=agencyshare/",
+                         "EmergencyEvents/2019_nCoV/T2D2/Analyses and Reports/__Reports/Transmission Trends/",
+                         "TransmissionTrendsClean.Rmd"), 
+                  output_file = report_name)
+## 3. Send Email -------------------------------------------------------------------------------------------------------------------------
+email <- paste0("<!DOCTYPE html><html><head>",
+                css,
+                "</head><body><div>",
+                "<h2> Transmission Trends, as of ", Sys.Date()-1, "</h2>",
+                "<p></p>",
+                "<p></p>","<hr>",
+                "<h3>Percent Positivity and Percent Vaccinated</h3>",
+                "<p><a name='plot'></a></p>",
+                '<img src="transmission pngs/positivity_vaccinated.png">', 
+                "<p></p>", "<hr>", 
+                "<h3>Transmission and Testing Rates</h3>",
+                "<p><a name='TransTest_ggplot'></a></p>",
+                '<img src="transmission pngs/trans_test.png">', 
+                "<p></p>", "<hr>",
+                "<h3>Transmission and Percent Vaccinated</h3>",
+                "<p><a name='TransVax_ggplot'></a></p>",
+                '<img src="transmission pngs/trans_vax.png">', 
+                "<p></p>", 
+                "<p></p>", "<hr>",
+                "<h3>Transmission and Percent Positivity</h3>",
+                "<p><a name='PPTransplot'></a></p>",
+                '<img src="transmission pngs/positivity_transmission.png">', 
+                "<p></p>", 
+                "<p></p>", "<hr>",
+                "<h3>Top 10 Highest Net Change in Transmission</h3>",
+                "<p><a name='Top10Fig_ggplot'></a></p>",
+                '<img src="transmission pngs/top10_netchange.png">', 
+                "<p></p>",
+                "<p></p>", "<hr>",
+                "<h3>Top 10 Overall Highest Transmission Levels</h3>",
+                "<p><a name='Top10_highestFig_ggplot'></a></p>",
+                '<img src="transmission pngs/top10_overall.png">', 
+                "<p></p>",
+                "</div></body></html>")
+
+
+#cc <- c(emails list)
+
+send.mail(from = "Brittany Hale <bhale@health.nyc.gov>", 
+          replyTo = "Brittany Hale <haleb@nychhc.org>", 
+          to = "Brittany Hale <haleb@nychhc.org>",
+          cc = cc,
+          subject = paste0("Transmission Trends through ", Sys.Date()-1), 
+          html = TRUE,
+          inline = TRUE,
+          body = email,
+          smtp = list(
+            host.name = "app22csmtp.health.dohmh.nycnet",
+            port = 25,
+            user.name = "",
+            passwd = "",
+            ssl = F),
+          authenticate = T,
+          attach.files = report_name,
+          send = T,
+          debug = T)
