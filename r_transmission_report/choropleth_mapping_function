@@ -1,0 +1,70 @@
+### Choropleth mapping function
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+### Date created: 2021-04-09
+### Created by: Sarah Klem (adapted initial code from Steffen Foerester)
+### Adapted by: Brittany Hale
+
+### Description: 
+# The purpose of this is to have an easy to use choropleth map template at the MODZCTA level
+
+library(sf)
+library(rgdal)
+library(sp)
+library(ggplot2)
+library(RColorBrewer)
+library(viridis)
+library(conflicted)
+
+## Custom function ----------------------------
+modzcta_choropleth <- function(df_to_map, 
+                               variable,
+                               join_on, 
+                               plot_title,
+                               plot_subtitle,
+                               plot_caption,
+                               legend_title, 
+                               tooltip_text, 
+                               minmax = NA, #ex: c(0, 100)
+                               hide_legend = FALSE
+                               ){
+  plot_title <- ifelse(missing(plot_title), "", plot_title)
+  plot_subtitle <- ifelse(missing(plot_subtitle), "", plot_subtitle)
+  legend_title <- ifelse(missing(legend_title), "", legend_title)
+  plot_caption <- ifelse(missing(plot_caption), "", plot_caption)
+  tooltip_text <- ifelse(missing(tooltip_text), "", tooltip_text)
+  
+  
+  # Pull in modzcta shapefile
+  sp.modzcta2010 <- sf::st_read("/opt/shapeFiles/MODZCTA_2010", "MODZCTA_2010", stringsAsFactors = F, quiet=T)
+  sp.modzcta2010 <- st_transform(sp.modzcta2010, CRS("+init=epsg:4326")) # WGS84
+  sp.modzcta2010 <- st_as_sf(sp.modzcta2010)
+  
+  zcta_sf <- sp.modzcta2010 %>%
+    left_join(df_to_map, by = c("MODZCTA" = join_on))
+  
+  ### Map
+  plot <- ggplot(data = zcta_sf, aes(fill = {{variable}}), text = tooltip_text) + 
+    geom_sf(color = gray(.5), size = 0.3) + 
+    theme_bw() + 
+    labs(fill = legend_title) + 
+    labs(title = plot_title, 
+         subtitle = plot_subtitle, 
+         caption = plot_caption)
+  
+  
+  if(is.na(minmax) == 1){
+    plot <- plot + scale_fill_viridis(option = "A", direction = -1, na.value = "white")
+  }
+  #if(!is.na(minmax)==1){
+  else if(!is.na(minmax)){
+    print("bcc")
+    plot <- plot + scale_fill_viridis(option = "A", direction = -1, na.value = "white",
+                                      #begin = minmax[1], end = minmax[2])
+                                      limits = minmax)
+  }
+
+  if(hide_legend == TRUE) {
+    plot <- plot + theme(legend.position = "none")
+  }
+  return(plot)
+}
